@@ -1,0 +1,8 @@
+opencv-python>=4.5.0
+numpy>=1.19.0
+pandas>=1.2.0
+matplotlib>=3.3.0
+seaborn>=0.11.0
+PyQt5>=5.15.0
+ultralytics>=8.0.0
+cvzone>=1.5.0 

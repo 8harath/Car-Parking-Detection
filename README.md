@@ -194,7 +194,7 @@ This project provides an intelligent parking space detection system that combine
 ### Setup Steps
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/car-parking-detection.git
+   git clone https://github.com/8harath/Car-Parking-Detection/
    cd car-parking-detection
    ```
 

@@ -6,12 +6,23 @@ import pickle
 import cvzone
 from pathlib import Path
 from car_detector import CarDetector
+import config
+import os
+import logging
+from setup_directories import setup_directories
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class EnhancedParkingDetector:
     def __init__(self, video_path=None, image_path=None):
+        # Setup directories first
+        setup_directories()
+
         self.video_path = video_path
         self.image_path = image_path
-        self.width, self.height = 120, 43
+        self.width, self.height = config.PARKING_WIDTH, config.PARKING_HEIGHT
         self.posList = []
         self.drawing = False
         self.start_point = None
@@ -37,20 +48,31 @@ class EnhancedParkingDetector:
         self.last_mouse_pos = None
         
     def load_parking_positions(self):
-        
+        """Load previously saved parking positions from file"""
         try:
-            with open('CarParkPos', 'rb') as f:
+            with open(config.POSITION_FILE, 'rb') as f:
                 self.posList = pickle.load(f)
-        except:
+            logger.info(f"Loaded {len(self.posList)} parking positions")
+        except FileNotFoundError:
+            logger.warning(f"No saved positions found at '{config.POSITION_FILE}'. Please select parking spaces.")
+            self.posList = []
+        except Exception as e:
+            logger.error(f"Error loading positions: {e}")
             self.posList = []
             
     def save_parking_positions(self):
-        # Save current state to history before saving
-        self.history.append(self.posList.copy())
-        with open('CarParkPos', 'wb') as f:
-            pickle.dump(self.posList, f)
+        """Save current parking positions to file"""
+        try:
+            # Save current state to history before saving
+            self.history.append(self.posList.copy())
+            with open(config.POSITION_FILE, 'wb') as f:
+                pickle.dump(self.posList, f)
+            logger.info(f"Saved {len(self.posList)} parking positions")
+        except Exception as e:
+            logger.error(f"Error saving positions: {e}")
 
     def add_help_text(self, img):
+        """Add help text overlay to the image showing keyboard shortcuts"""
         # Get image dimensions
         height, width = img.shape[:2]
         
@@ -177,6 +199,7 @@ class EnhancedParkingDetector:
             self.save_parking_positions()
 
     def process_frame(self, frame):
+        """Process frame using computer vision techniques for parking space detection"""
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         # Apply Gaussian blur
@@ -192,16 +215,17 @@ class EnhancedParkingDetector:
         return dilated
 
     def check_parking_space(self, img_pro, img):
+        """Check each parking space and determine if it's occupied or empty"""
         space_counter = 0
         occupied_slots = 0
-        
+
         for pos in self.posList:
             x, y = pos
             img_crop = img_pro[y:y + self.height, x:x + self.width]
             count = cv2.countNonZero(img_crop)
-            
+
             # Enhanced threshold for better detection
-            if count < 900:
+            if count < config.OCCUPANCY_THRESHOLD:
                 color = (0, 255, 0)  # Green for empty
                 thickness = 5
                 space_counter += 1
@@ -222,54 +246,77 @@ class EnhancedParkingDetector:
         return space_counter, occupied_slots
 
     def generate_csv_report(self, total_slots, occupied_slots, available_slots):
-        data = {
-            'Total Slots': [total_slots],
-            'Occupied Slots': [occupied_slots],
-            'Available Slots': [available_slots],
-            'Timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        }
-        df = pd.DataFrame(data)
-        df.to_csv('parking_status.csv', index=False)
+        """Generate CSV report with parking statistics"""
+        try:
+            data = {
+                'Total Slots': [total_slots],
+                'Occupied Slots': [occupied_slots],
+                'Available Slots': [available_slots],
+                'Timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+            }
+            df = pd.DataFrame(data)
+
+            # Check if we should append or overwrite
+            csv_path = os.path.join(config.DATA_DIR, config.CSV_FILE)
+            if config.CSV_APPEND_MODE and os.path.exists(csv_path):
+                df.to_csv(csv_path, mode='a', header=False, index=False)
+                logger.info(f"Appended data to {csv_path}")
+            else:
+                df.to_csv(csv_path, index=False)
+                logger.info(f"Created new CSV report at {csv_path}")
+        except Exception as e:
+            logger.error(f"Error generating CSV report: {e}")
 
     def process_video(self):
+        """Process video file for parking detection"""
         if not self.video_path:
             raise ValueError("Video path not provided")
-            
+
+        # Validate video file exists
+        if not os.path.exists(self.video_path):
+            raise FileNotFoundError(f"Video file not found: {self.video_path}")
+
+        logger.info(f"Processing video: {self.video_path}")
         cap = cv2.VideoCapture(self.video_path)
+
+        if not cap.isOpened():
+            raise IOError(f"Cannot open video file: {self.video_path}")
         
         # Get video properties
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         # Create a window that can be resized
-        cv2.namedWindow("Parking Detection", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Parking Detection", frame_width, frame_height)
-        
-        while True:
-            if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                
-            success, img = cap.read()
-            if not success:
-                break
-                
-            processed_img = self.process_frame(img)
-            available_slots, occupied_slots = self.check_parking_space(processed_img, img)
-            
-            # Generate CSV report every 30 frames
-            if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % 30 == 0:
-                self.generate_csv_report(
-                    total_slots=len(self.posList),
-                    occupied_slots=occupied_slots,
-                    available_slots=available_slots
-                )
-            
-            cv2.imshow("Parking Detection", img)
-            if cv2.waitKey(10) & 0xFF == ord('q'):
-                break
-                
-        cap.release()
-        cv2.destroyAllWindows()
+        cv2.namedWindow(config.WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(config.WINDOW_NAME, frame_width, frame_height)
+
+        try:
+            while True:
+                if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+                success, img = cap.read()
+                if not success:
+                    break
+
+                processed_img = self.process_frame(img)
+                available_slots, occupied_slots = self.check_parking_space(processed_img, img)
+
+                # Generate CSV report every 30 frames
+                if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % 30 == 0:
+                    self.generate_csv_report(
+                        total_slots=len(self.posList),
+                        occupied_slots=occupied_slots,
+                        available_slots=available_slots
+                    )
+
+                cv2.imshow(config.WINDOW_NAME, img)
+                if cv2.waitKey(10) & 0xFF == ord('q'):
+                    break
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()
+            logger.info("Video processing completed")
 
     def clear_all_markings(self):
         """Clear all markings and reset to original image"""
@@ -279,6 +326,7 @@ class EnhancedParkingDetector:
         self.history = []
         self.is_reset = True
         self.save_parking_positions()
+        logger.info("Cleared all markings")
 
     def undo_last_selection(self):
         """Remove the last selected grid completely"""
@@ -287,149 +335,169 @@ class EnhancedParkingDetector:
             if self.original_image is not None:
                 self.current_image = self.original_image.copy()
             self.save_parking_positions()
+            logger.info("Undid last selection")
+        else:
+            logger.warning("No history to undo")
 
     def process_image(self):
+        """Process image file for parking space selection and detection"""
         if not self.image_path:
             raise ValueError("Image path not provided")
-            
+
+        # Validate image file exists
+        if not os.path.exists(self.image_path):
+            raise FileNotFoundError(f"Image file not found: {self.image_path}")
+
+        logger.info(f"Processing image: {self.image_path}")
+
         # Read image with full resolution
         self.original_image = cv2.imread(self.image_path, cv2.IMREAD_UNCHANGED)
         if self.original_image is None:
-            raise ValueError(f"Could not load image from {self.image_path}")
+            raise IOError(f"Could not load image from {self.image_path}")
         
         self.current_image = self.original_image.copy()
         
         # Get image dimensions
         height, width = self.original_image.shape[:2]
-        
+
         # Calculate window size with borders
-        border_size = 50
+        border_size = config.BORDER_SIZE
         window_width = width + 2 * border_size
         window_height = height + 2 * border_size
-        
+
         # Create a window that can be resized
-        cv2.namedWindow("Parking Detection", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Parking Detection", window_width, window_height)
-        
+        cv2.namedWindow(config.WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(config.WINDOW_NAME, window_width, window_height)
+
         # Set mouse callback
-        cv2.setMouseCallback("Parking Detection", self.mouse_callback)
-        
-        while True:
-            # Create a bordered image
-            bordered_img = np.zeros((window_height, window_width, 3), dtype=np.uint8)
-            bordered_img[border_size:border_size+height, border_size:border_size+width] = self.current_image.copy()
-            
-            # Only draw parking spaces if there are any and not in reset state
-            if self.posList and not self.is_reset:
-                for pos in self.posList:
-                    x, y = pos
+        cv2.setMouseCallback(config.WINDOW_NAME, self.mouse_callback)
+
+        try:
+            while True:
+                # Create a bordered image
+                bordered_img = np.zeros((window_height, window_width, 3), dtype=np.uint8)
+                bordered_img[border_size:border_size+height, border_size:border_size+width] = self.current_image.copy()
+
+                # Only draw parking spaces if there are any and not in reset state
+                if self.posList and not self.is_reset:
+                    for pos in self.posList:
+                        x, y = pos
+                        # Adjust coordinates for border
+                        x += border_size
+                        y += border_size
+                        cv2.rectangle(bordered_img, (x, y), (x + self.width, y + self.height), (255, 0, 255), 2)
+
+                # Draw selection rectangle if drawing
+                if self.drawing and self.start_point and self.end_point:
+                    x1, y1 = self.start_point
+                    x2, y2 = self.end_point
                     # Adjust coordinates for border
-                    x += border_size
-                    y += border_size
-                    cv2.rectangle(bordered_img, (x, y), (x + self.width, y + self.height), (255, 0, 255), 2)
-            
-            # Draw selection rectangle if drawing
-            if self.drawing and self.start_point and self.end_point:
-                x1, y1 = self.start_point
-                x2, y2 = self.end_point
-                # Adjust coordinates for border
-                x1 += border_size
-                y1 += border_size
-                x2 += border_size
-                y2 += border_size
-                cv2.rectangle(bordered_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                
-                # Draw grid preview
-                x1, x2 = min(x1, x2), max(x1, x2)
-                y1, y2 = min(y1, y2), max(y1, y2)
-                
-                num_spaces_x = (x2 - x1) // self.width
-                num_spaces_y = (y2 - y1) // self.height
-                
-                for i in range(num_spaces_x):
-                    for j in range(num_spaces_y):
-                        pos_x = x1 + i * self.width
-                        pos_y = y1 + j * self.height
-                        cv2.rectangle(bordered_img, (pos_x, pos_y), 
-                                    (pos_x + self.width, pos_y + self.height), (0, 255, 0), 1)
-            
-            # Add essential information only if not in reset state
-            if not self.is_reset:
-                total_spaces = len(self.posList)
-                
-                # Only process image and show statistics if there are parking spaces
-                if total_spaces > 0:
+                    x1 += border_size
+                    y1 += border_size
+                    x2 += border_size
+                    y2 += border_size
+                    cv2.rectangle(bordered_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                    # Draw grid preview
+                    x1, x2 = min(x1, x2), max(x1, x2)
+                    y1, y2 = min(y1, y2), max(y1, y2)
+
+                    num_spaces_x = (x2 - x1) // self.width
+                    num_spaces_y = (y2 - y1) // self.height
+
+                    for i in range(num_spaces_x):
+                        for j in range(num_spaces_y):
+                            pos_x = x1 + i * self.width
+                            pos_y = y1 + j * self.height
+                            cv2.rectangle(bordered_img, (pos_x, pos_y),
+                                        (pos_x + self.width, pos_y + self.height), (0, 255, 0), 1)
+
+                # Add essential information only if not in reset state
+                if not self.is_reset:
+                    total_spaces = len(self.posList)
+
+                    # Only process image and show statistics if there are parking spaces
+                    if total_spaces > 0:
+                        processed_img = self.process_frame(self.current_image)
+                        available_slots, occupied_slots = self.check_parking_space(processed_img, self.current_image)
+                        empty_spaces = available_slots
+
+                        # Display statistics in the top-right corner
+                        cvzone.putTextRect(bordered_img, f'Total Slots: {total_spaces}',
+                                         (window_width - 250, 30), scale=2, thickness=3, offset=10, colorR=(0,200,0))
+                        cvzone.putTextRect(bordered_img, f'Empty Slots: {empty_spaces}',
+                                         (window_width - 250, 80), scale=2, thickness=3, offset=10, colorR=(0,200,0))
+
+                # Show help text if enabled
+                if self.show_help:
+                    self.add_help_text(bordered_img)
+
+                # Apply zoom and pan
+                display_img = self.apply_zoom_and_pan(bordered_img)
+
+                cv2.imshow(config.WINDOW_NAME, display_img)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('r'):
+                    self.clear_all_markings()
+                elif key == ord('z'):
+                    self.undo_last_selection()
+                elif key == ord('s'):
+                    self.save_parking_positions()
+                    self.is_reset = False
+                    cvzone.putTextRect(bordered_img, "Layout Saved!",
+                                     (window_width//2 - 100, window_height - 50),
+                                     scale=2, thickness=2, offset=10, colorR=(0,255,0))
+                    cv2.imshow(config.WINDOW_NAME, bordered_img)
+                    cv2.waitKey(1000)
+                elif key == ord('d'):
+                    if len(self.posList) == 0:
+                        logger.warning("Please select parking spaces first!")
+                        print("Please select parking spaces first!")
+                        continue
+
+                    logger.info("Starting vehicle detection and report generation...")
+                    print("\n🚗 Detecting vehicles...")
+
+                    # Process the image and detect cars
                     processed_img = self.process_frame(self.current_image)
                     available_slots, occupied_slots = self.check_parking_space(processed_img, self.current_image)
-                    empty_spaces = available_slots
-                    
-                    # Display statistics in the top-right corner
-                    cvzone.putTextRect(bordered_img, f'Total Slots: {total_spaces}', 
-                                     (window_width - 250, 30), scale=2, thickness=3, offset=10, colorR=(0,200,0))
-                    cvzone.putTextRect(bordered_img, f'Empty Slots: {empty_spaces}', 
-                                     (window_width - 250, 80), scale=2, thickness=3, offset=10, colorR=(0,200,0))
-            
-            # Show help text if enabled
-            if self.show_help:
-                self.add_help_text(bordered_img)
-            
-            # Apply zoom and pan
-            display_img = self.apply_zoom_and_pan(bordered_img)
-            
-            cv2.imshow("Parking Detection", display_img)
-            
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-            elif key == ord('r'):
-                self.clear_all_markings()
-            elif key == ord('z'):
-                self.undo_last_selection()
-            elif key == ord('s'):
-                self.save_parking_positions()
-                self.is_reset = False
-                cvzone.putTextRect(bordered_img, "Layout Saved!", 
-                                 (window_width//2 - 100, window_height - 50), 
-                                 scale=2, thickness=2, offset=10, colorR=(0,255,0))
-                cv2.imshow("Parking Detection", bordered_img)
-                cv2.waitKey(1000)
-            elif key == ord('d'):
-                if len(self.posList) == 0:
-                    print("Please select parking spaces first!")
-                    continue
-                    
-                # Process the image and detect cars
-                processed_img = self.process_frame(self.current_image)
-                available_slots, occupied_slots = self.check_parking_space(processed_img, self.current_image)
-                
-                # Run ML-based car detection
-                results = self.car_detector.detect_cars(self.current_image)
-                detections, space_status = self.car_detector.process_detections(results, self.posList, self.current_image)
-                
-                # Generate comprehensive report
-                report_path, text_report_path = self.car_detector.generate_report(
-                    self.current_image, self.posList, detections, space_status
-                )
-                
-                print(f"\nReport generated successfully!")
-                print(f"Visual report saved to: {report_path}")
-                print(f"Text report saved to: {text_report_path}")
-                
-                # Generate CSV report
-                self.generate_csv_report(
-                    total_slots=len(self.posList),
-                    occupied_slots=occupied_slots,
-                    available_slots=available_slots
-                )
-                
-                # Show success message
-                cvzone.putTextRect(bordered_img, "Report Generated!", 
-                                 (window_width//2 - 150, window_height - 50), 
-                                 scale=3, thickness=3, offset=10, colorR=(0,255,0))
-                cv2.imshow("Parking Detection", bordered_img)
-                cv2.waitKey(2000)
-        
-        cv2.destroyAllWindows()
+
+                    print("🤖 Running ML-based vehicle detection...")
+                    # Run ML-based car detection
+                    results = self.car_detector.detect_cars(self.current_image)
+                    detections, space_status = self.car_detector.process_detections(results, self.posList, self.current_image)
+
+                    print("📊 Generating visual report...")
+                    # Generate comprehensive report
+                    report_path, text_report_path = self.car_detector.generate_report(
+                        self.current_image, self.posList, detections, space_status
+                    )
+
+                    print("💾 Saving CSV data...")
+                    logger.info(f"Report generated successfully!")
+                    print(f"\n✓ Report generated successfully!")
+                    print(f"  Visual report: {report_path}")
+                    print(f"  Text report: {text_report_path}")
+
+                    # Generate CSV report
+                    self.generate_csv_report(
+                        total_slots=len(self.posList),
+                        occupied_slots=occupied_slots,
+                        available_slots=available_slots
+                    )
+
+                    # Show success message
+                    cvzone.putTextRect(bordered_img, "Report Generated!",
+                                     (window_width//2 - 150, window_height - 50),
+                                     scale=3, thickness=3, offset=10, colorR=(0,255,0))
+                    cv2.imshow(config.WINDOW_NAME, bordered_img)
+                    cv2.waitKey(2000)
+        finally:
+            cv2.destroyAllWindows()
+            logger.info("Image processing completed")
 
 if __name__ == "__main__":
     # Example usage

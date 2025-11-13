@@ -5,20 +5,41 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
 import os
+import config
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class CarDetector:
     def __init__(self):
+        """Initialize the car detector with YOLOv8 model"""
         # Load YOLOv8 model
-        self.model = YOLO('yolov8n.pt')
-        self.car_classes = [2, 3, 5, 7]  # COCO classes for cars, motorcycles, buses, trucks
-        self.confidence_threshold = 0.5  # Minimum confidence for detections
+        logger.info(f"Loading YOLOv8 model from {config.MODEL_PATH}...")
+        print(f"Loading YOLOv8 model...")
+        try:
+            self.model = YOLO(config.MODEL_PATH)
+            logger.info("YOLOv8 model loaded successfully!")
+            print("✓ Model loaded successfully!")
+        except Exception as e:
+            logger.error(f"Error loading YOLO model: {e}")
+            raise IOError(f"Failed to load YOLO model from {config.MODEL_PATH}: {e}")
+
+        self.car_classes = config.CAR_CLASSES
+        self.confidence_threshold = config.CONFIDENCE_THRESHOLD
         
     def detect_cars(self, image):
-        # Run YOLOv8 inference with confidence threshold
-        results = self.model(image, conf=self.confidence_threshold)
-        return results[0]
-    
+        """Run YOLOv8 inference on image to detect vehicles"""
+        try:
+            results = self.model(image, conf=self.confidence_threshold)
+            return results[0]
+        except Exception as e:
+            logger.error(f"Error during vehicle detection: {e}")
+            raise
+
     def detect_special_parking(self, image, x, y, width, height):
+        """Detect if a parking space has special marking (e.g., yellow lines for disabled parking)"""
         # Extract the parking space region
         space_region = image[y:y+height, x:x+width]
         
@@ -60,6 +81,7 @@ class CarDetector:
         return yellow_percentage > 3 or has_yellow_lines
     
     def check_space_occupancy(self, image, x, y, width, height):
+        """Check if a parking space is occupied based on pixel analysis"""
         # Extract the parking space region
         space_region = image[y:y+height, x:x+width]
         
@@ -75,13 +97,14 @@ class CarDetector:
         return occupancy_percentage > 30  # Return True if more than 30% of the space is occupied
     
     def process_detections(self, results, parking_spaces, image):
+        """Process YOLO detection results and match them with parking spaces"""
         # Get bounding boxes for detected vehicles
         detections = []
         space_status = []
-        
+
         for pos in parking_spaces:
             x, y = pos
-            width, height = 107, 48  # Standard parking space dimensions
+            width, height = config.PARKING_WIDTH, config.PARKING_HEIGHT  # Standard parking space dimensions
             
             # Check if it's a special parking space
             is_special = self.detect_special_parking(image, x, y, width, height)
@@ -124,28 +147,39 @@ class CarDetector:
         
         return detections, space_status
     
-    def generate_report(self, image, parking_spaces, detections, space_status, output_dir='reports'):
+    def generate_report(self, image, parking_spaces, detections, space_status, output_dir=None):
+        """Generate comprehensive visual and text reports for parking lot analysis"""
+        # Use config directory if not specified
+        if output_dir is None:
+            output_dir = config.REPORTS_DIR
+
         # Create output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Report directory ready: {output_dir}")
+        except Exception as e:
+            logger.error(f"Error creating report directory: {e}")
+            raise
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # Create visualization
-        plt.figure(figsize=(15, 10))
-        
+        plt.figure(figsize=config.REPORT_FIGSIZE)
+
         # Plot 1: Original image with detections
         plt.subplot(2, 2, 1)
         img_with_detections = image.copy()
-        
+
         # Draw parking spaces with different colors based on type and status
         for status in space_status:
             x, y = status['position']
             if status['is_special']:
-                color = (0, 255, 255)  # Yellow for special parking
+                color = config.COLOR_SPECIAL  # Yellow for special parking
             else:
-                color = (255, 0, 255)  # Magenta for regular parking
-            
+                color = config.COLOR_REGULAR  # Magenta for regular parking
+
             # Draw rectangle
-            cv2.rectangle(img_with_detections, (x, y), (x + 107, y + 48), color, 2)
+            cv2.rectangle(img_with_detections, (x, y),
+                         (x + config.PARKING_WIDTH, y + config.PARKING_HEIGHT), color, 2)
             
             # Add status label
             label = "Special " if status['is_special'] else ""
@@ -228,38 +262,50 @@ class CarDetector:
         # Save the report
         plt.tight_layout()
         report_path = os.path.join(output_dir, f'parking_report_{timestamp}.png')
-        plt.savefig(report_path, dpi=300, bbox_inches='tight')
-        plt.close()
+        try:
+            plt.savefig(report_path, dpi=config.REPORT_DPI, bbox_inches='tight')
+            logger.info(f"Visual report saved: {report_path}")
+        except Exception as e:
+            logger.error(f"Error saving visual report: {e}")
+            raise
+        finally:
+            plt.close()
         
         # Generate concise text report
         text_report_path = os.path.join(output_dir, f'parking_report_{timestamp}.txt')
-        with open(text_report_path, 'w') as f:
-            f.write(f"Parking Lot Analysis Report\n")
-            f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
-            f.write("Space Distribution:\n")
-            f.write(f"Total Parking Spaces: {total_spaces}\n")
-            f.write(f"Special Parking Spaces: {special_spaces}\n")
-            f.write(f"Regular Parking Spaces: {regular_spaces}\n\n")
-            
-            f.write("Occupancy Status:\n")
-            f.write(f"Total Occupied Spaces: {occupied_spaces}\n")
-            f.write(f"Total Available Spaces: {total_spaces - occupied_spaces}\n")
-            f.write(f"Special Spaces Occupied: {special_occupied}\n")
-            f.write(f"Regular Spaces Occupied: {regular_occupied}\n\n")
-            
-            f.write("Occupancy Rates:\n")
-            f.write(f"Overall Occupancy: {(occupied_spaces/total_spaces)*100:.1f}%\n")
-            
-            # Add checks for division by zero
-            if special_spaces > 0:
-                f.write(f"Special Spaces Occupancy: {(special_occupied/special_spaces)*100:.1f}%\n")
-            else:
-                f.write("Special Spaces Occupancy: N/A (No special spaces detected)\n")
-                
-            if regular_spaces > 0:
-                f.write(f"Regular Spaces Occupancy: {(regular_occupied/regular_spaces)*100:.1f}%\n")
-            else:
-                f.write("Regular Spaces Occupancy: N/A (No regular spaces detected)\n")
-        
+        try:
+            with open(text_report_path, 'w') as f:
+                f.write(f"Parking Lot Analysis Report\n")
+                f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+                f.write("Space Distribution:\n")
+                f.write(f"Total Parking Spaces: {total_spaces}\n")
+                f.write(f"Special Parking Spaces: {special_spaces}\n")
+                f.write(f"Regular Parking Spaces: {regular_spaces}\n\n")
+
+                f.write("Occupancy Status:\n")
+                f.write(f"Total Occupied Spaces: {occupied_spaces}\n")
+                f.write(f"Total Available Spaces: {total_spaces - occupied_spaces}\n")
+                f.write(f"Special Spaces Occupied: {special_occupied}\n")
+                f.write(f"Regular Spaces Occupied: {regular_occupied}\n\n")
+
+                f.write("Occupancy Rates:\n")
+                f.write(f"Overall Occupancy: {(occupied_spaces/total_spaces)*100:.1f}%\n")
+
+                # Add checks for division by zero
+                if special_spaces > 0:
+                    f.write(f"Special Spaces Occupancy: {(special_occupied/special_spaces)*100:.1f}%\n")
+                else:
+                    f.write("Special Spaces Occupancy: N/A (No special spaces detected)\n")
+
+                if regular_spaces > 0:
+                    f.write(f"Regular Spaces Occupancy: {(regular_occupied/regular_spaces)*100:.1f}%\n")
+                else:
+                    f.write("Regular Spaces Occupancy: N/A (No regular spaces detected)\n")
+
+            logger.info(f"Text report saved: {text_report_path}")
+        except Exception as e:
+            logger.error(f"Error saving text report: {e}")
+            raise
+
         return report_path, text_report_path 

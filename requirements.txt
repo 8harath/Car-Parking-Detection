@@ -1,8 +1,36 @@
-opencv-python>=4.5.0
-numpy>=1.19.0
-pandas>=1.2.0
-matplotlib>=3.3.0
-seaborn>=0.11.0
-PyQt5>=5.15.0
-ultralytics>=8.0.0
-cvzone>=1.5.0 
+# Car Parking Detection System - Requirements
+# Python 3.8+ required
+
+# Computer Vision
+opencv-python>=4.8.0,<5.0.0
+opencv-contrib-python>=4.8.0,<5.0.0  # Optional: for additional CV features
+
+# Deep Learning - YOLOv8
+ultralytics>=8.0.200,<9.0.0
+torch>=2.0.0  # Auto-installed with ultralytics
+torchvision>=0.15.0  # Auto-installed with ultralytics
+
+# Numerical Computing
+numpy>=1.24.0,<2.0.0
+
+# Data Processing & Analysis
+pandas>=2.0.0,<3.0.0
+
+# Visualization
+matplotlib>=3.7.0,<4.0.0
+seaborn>=0.12.0,<1.0.0
+
+# GUI Support
+PyQt5>=5.15.0,<6.0.0  # For advanced GUI features (optional)
+
+# Utilities
+cvzone>=1.6.1,<2.0.0  # Computer vision utilities
+pillow>=10.0.0,<11.0.0  # Image processing
+tqdm>=4.65.0,<5.0.0  # Progress bars (optional)
+
+# Development Dependencies (Optional)
+# Uncomment if you're developing/contributing
+# pytest>=7.4.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.5.0
